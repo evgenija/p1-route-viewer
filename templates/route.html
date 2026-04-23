@@ -125,19 +125,32 @@
     }
   }
 
+  var lastIdx = waypoints.length - 1;
+
   waypoints.forEach(function(wp, i) {
     if (wp.lat == null || wp.lon == null) return;
     bounds.push([wp.lat, wp.lon]);
 
-    var color = wp.is_suspicious ? '#E65100' : '#2E7D32';
-    var label = wp.is_suspicious ? '!' : (i + 1);
-    var icon = L.divIcon({
-      html: '<div style="background:' + color + ';color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4)">' + label + '</div>',
-      iconSize: [24, 24], iconAnchor: [12, 12], className: ''
-    });
+    var isStart  = i === 0;
+    var isFinish = i === lastIdx && lastIdx > 0;
+
+    var iconHtml;
+    if (isStart) {
+      iconHtml = '<div style="background:#1B5E20;color:#fff;border-radius:50% 50% 50% 0;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:bold;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.5);transform:rotate(-45deg)"><span style="transform:rotate(45deg)">▶</span></div>';
+    } else if (isFinish) {
+      iconHtml = '<div style="background:#B71C1C;color:#fff;border-radius:50% 50% 50% 0;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:bold;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.5);transform:rotate(-45deg)"><span style="transform:rotate(45deg)">■</span></div>';
+    } else if (wp.is_suspicious) {
+      iconHtml = '<div style="background:#E65100;color:#fff;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:bold;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)">!</div>';
+    } else {
+      iconHtml = '<div style="background:#1976D2;color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.3)">' + i + '</div>';
+    }
+
+    var size   = (isStart || isFinish) ? [32, 32] : [22, 22];
+    var anchor = (isStart || isFinish) ? [8, 32]  : [11, 11];
+    var icon = L.divIcon({ html: iconHtml, iconSize: size, iconAnchor: anchor, className: '' });
 
     var popupLines = [
-      '<b>' + (wp.name || '—') + '</b>',
+      '<b>' + (isStart ? '🟢 СТАРТ' : isFinish ? '🔴 ФІНІШ' : (wp.name || '—')) + '</b>',
       'Час: ' + (wp.timestamp ? wp.timestamp.substring(11, 16) : '—'),
       wp.distance_km != null ? 'Відстань: +' + wp.distance_km.toFixed(1) + ' км' : '',
       wp.speed_kmh != null ? 'Швидкість: ' + Math.round(wp.speed_kmh) + ' км/год' : '',
