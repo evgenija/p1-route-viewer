@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Маршрут #{{ route.route_id }}</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; color: #1a1a1a; background: #f5f5f5; }
+    .header { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 16px 24px; }
+    .header h1 { font-size: 1.2rem; font-weight: 600; margin-bottom: 10px; }
+    .metrics { display: flex; gap: 24px; flex-wrap: wrap; }
+    .metric { display: flex; flex-direction: column; }
+    .metric-label { font-size: 0.72rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+    .metric-value { font-size: 1rem; font-weight: 600; margin-top: 2px; }
+    #map { height: 480px; width: 100%; }
+    .map-notice { background: #fff8e1; border-left: 4px solid #ffc107;
+                  padding: 8px 16px; font-size: 0.85rem; color: #795548; }
+    .timeline { background: #fff; margin-top: 2px; padding: 16px 24px; }
+    .timeline h2 { font-size: 1rem; font-weight: 600; margin-bottom: 12px; color: #555; }
+    .wp-row { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid #f0f0f0;
+              align-items: flex-start; font-size: 0.88rem; }
+    .wp-row:last-child { border-bottom: none; }
+    .wp-index { min-width: 24px; color: #aaa; font-size: 0.8rem; padding-top: 2px; }
+    .wp-name { min-width: 140px; font-weight: 500; }
+    .wp-time { min-width: 60px; color: #666; }
+    .wp-dist { min-width: 70px; color: #555; }
+    .wp-speed { min-width: 80px; color: #555; }
+    .wp-status { flex: 1; color: #e65100; font-size: 0.82rem; }
+    .wp-suspicious { background: #fff3e0; border-radius: 4px; padding: 2px 0; }
+    footer { text-align: center; padding: 16px; font-size: 0.78rem; color: #aaa; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>
+    Маршрут #{{ route.route_id }}
+    {% if route.driver_name %} — {{ route.driver_name }}{% endif %}
+    {% if date_str %}, {{ date_str }}{% endif %}
+  </h1>
+  <div class="metrics">
+    <div class="metric">
+      <span class="metric-label">GPS трекінг</span>
+      <span class="metric-value">{{ "%.1f"|format(route.total_km) }} км</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Одометр</span>
+      <span class="metric-value">
+        {% if odometer_diff %}{{ "%.1f"|format(odometer_diff) }} км{% else %}—{% endif %}
+      </span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Похибка</span>
+      <span class="metric-value">
+        {% if error_pct is not none %}{{ error_badge }} {{ "%.1f"|format(error_pct) }}%{% else %}—{% endif %}
+      </span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Геоміток</span>
+      <span class="metric-value">
+        {{ route.waypoints|length }}
+        {% if suspicious_count > 0 %}<span style="color:#e65100"> (⚠️ {{ suspicious_count }} підозрілих)</span>{% endif %}
+      </span>
+    </div>
+  </div>
+</div>
+
+{% if not decoded_polyline %}
+<div class="map-notice">
+  Карта недоступна для цього маршруту — маршрут записано до оновлення системи. Показано пряме з'єднання між геомітками.
+</div>
+{% endif %}
+
+<div id="map"></div>
+
+<div class="timeline">
+  <h2>Геомітки маршруту</h2>
+  {% for wp in route.waypoints %}
+  <div class="wp-row {% if wp.is_suspicious %}wp-suspicious{% endif %}">
+    <span class="wp-index">{{ loop.index }}</span>
+    <span class="wp-name">{{ wp.name or "—" }}</span>
+    <span class="wp-time">{{ wp.timestamp[11:16] if wp.timestamp else "—" }}</span>
+    <span class="wp-dist">{% if wp.distance_km is not none %}+{{ "%.1f"|format(wp.distance_km) }} км{% else %}—{% endif %}</span>
+    <span class="wp-speed">{% if wp.speed_kmh is not none %}{{ "%.0f"|format(wp.speed_kmh) }} км/год{% else %}—{% endif %}</span>
+    <span class="wp-status">
+      {% if wp.is_suspicious %}
+        {% set si = wp.suspicious_info %}
+        {% if si and si.type == "C" %}
+          ⚠️ Водій не ставив геомітку {{ si.hours }}г {{ si.mins }}хв. Система не може підтвердити маршрут на цьому відрізку. GPS дані відсутні — включено як є.
+        {% elif si and si.type == "B" %}
+          ⚠️ Низька швидкість ({% if si.speed %}{{ "%.0f"|format(si.speed) }}{% else %}?{% endif %} км/год, {{ si.gap_min }} хв). Можлива зупинка без позначки. GPS валідний.
+        {% else %}
+          ⚠️ Підозрілий відрізок.
+        {% endif %}
+      {% endif %}
+    </span>
+  </div>
+  {% endfor %}
+</div>
+
+<footer>Маршрут по реальних дорогах. Кілометраж розраховано через GPS.</footer>
+
+<script>
+  var waypoints = {{ route.waypoints | tojson }};
+  var decodedPolyline = {{ decoded_polyline | tojson }};
+
+  var map = L.map('map');
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors'
+  }).addTo(map);
+
+  var bounds = [];
+
+  if (decodedPolyline && decodedPolyline.length > 0) {
+    var poly = L.polyline(decodedPolyline, {color: '#1976D2', weight: 4, opacity: 0.85}).addTo(map);
+    bounds = decodedPolyline;
+  } else if (waypoints.length >= 2) {
+    var coords = waypoints.filter(w => !w.is_suspicious).map(w => [w.lat, w.lon]);
+    if (coords.length >= 2) {
+      L.polyline(coords, {color: '#90A4AE', weight: 3, dashArray: '8,8', opacity: 0.7}).addTo(map);
+      bounds = coords;
+    }
+  }
+
+  waypoints.forEach(function(wp, i) {
+    if (wp.lat == null || wp.lon == null) return;
+    bounds.push([wp.lat, wp.lon]);
+
+    var color = wp.is_suspicious ? '#E65100' : '#2E7D32';
+    var label = wp.is_suspicious ? '!' : (i + 1);
+    var icon = L.divIcon({
+      html: '<div style="background:' + color + ';color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4)">' + label + '</div>',
+      iconSize: [24, 24], iconAnchor: [12, 12], className: ''
+    });
+
+    var popupLines = [
+      '<b>' + (wp.name || '—') + '</b>',
+      'Час: ' + (wp.timestamp ? wp.timestamp.substring(11, 16) : '—'),
+      wp.distance_km != null ? 'Відстань: +' + wp.distance_km.toFixed(1) + ' км' : '',
+      wp.speed_kmh != null ? 'Швидкість: ' + Math.round(wp.speed_kmh) + ' км/год' : '',
+      wp.is_suspicious ? '<span style="color:#E65100">⚠️ Підозрілий</span>' : '✅ Валідний',
+    ].filter(Boolean).join('<br>');
+
+    L.marker([wp.lat, wp.lon], {icon: icon}).addTo(map).bindPopup(popupLines);
+  });
+
+  if (bounds.length > 0) {
+    map.fitBounds(bounds, {padding: [32, 32]});
+  } else {
+    map.setView([50.45, 30.52], 6);
+  }
+</script>
+</body>
+</html>
